@@ -1,30 +1,37 @@
 #include "multi-lookup.h"
 
 // Global variables
+// static pthread_mutex_t arrayMutex = PTHREAD_MUTEX_INITIALIZER;
+// static pthread_mutex_t requesterFileMutex = PTHREAD_MUTEX_INITIALIZER;
+// static pthread_mutex_t resolverFileMutex = PTHREAD_MUTEX_INITIALIZER;
+// static pthread_mutex_t requesterQueueMutex = PTHREAD_MUTEX_INITIALIZER;
+// sem_t arraySem;
+// queue_t *inputFileQueue;
+// int sharedArrayHead = 0;
+// int sharedArrayTail = 0;
+// int activeRequesters = 0;
+// int activeResolvers = 0;
+// int arrayAmount = 0;
+// char* sharedArray[ARRAY_SIZE];
+// char* resOutputFileName;
+// char* reqOutputFileName;
+// FILE *resOutputFile;
+// FILE *reqOutputFile;
 
-
-// Creates a thread that reads from file in folder and writes to shared array and writes to file in folder
-// Repeats until all files in folder have been read
 
 void *requesterFunction (void *arg) {
-    // Read from file in folder
-    // Write to shared array
-    // Write to file in folder
-    // Repeat until all files in folder have been read
-    struct requesterArgs *args = (struct requesterArgs*) arg;
-	args->activeRequesters ++;
+    struct requesterArgs args = *(struct requesterArgs*) arg;
+	args.activeRequesters++;
     int fileCount = 0;
+    char fileName[MAX_NAME_LENGTH];
     while (1) {
-        pthread_mutex_lock(args->requesterQueueMutex);
-        if (queue_isEmpty(args->inputFileQueue)) {
-            pthread_mutex_unlock(args->requesterQueueMutex);
+        pthread_mutex_lock(args.requesterQueueMutex);
+        if (queue_isEmpty(args.inputFileQueue)) {
+            pthread_mutex_unlock(args.requesterQueueMutex);
             break;
         }
-		char* fileName = queue_pop(args->inputFileQueue);
-		// fileName = queue_pop(args->inputFileQueue);
-		//memcpy(&fileName, queue_pop(args->inputFileQueue), MAX_NAME_LENGTH);
-		// strcpy(queue_pop(args->inputFileQueue), fileName);
-		pthread_mutex_unlock(args->requesterQueueMutex);
+        strcpy(fileName, queue_pop(args.inputFileQueue));
+		pthread_mutex_unlock(args.requesterQueueMutex);
         FILE *inputFile = fopen(fileName, "r");
         if (inputFile == NULL) {
             fprintf(stderr, "invalid file %s\n", fileName);
@@ -34,30 +41,27 @@ void *requesterFunction (void *arg) {
 		    size_t len = 0;
 		    ssize_t read;
 		    while ((read = getline(&line, &len, inputFile)) != -1) {
-		        // Remove newline character
-		        line[strlen(line) - 1] = '\0';
-		        // Write to shared array
-		        while (args->sharedArrayTail - args->sharedArrayHead == ARRAY_SIZE - 1) {
+		        while (*args.arrayAmount == 10) {
 		            // Wait until there is space in the array
 		        }
-				if ((sizeof(line) / sizeof(char)) > MAX_NAME_LENGTH) {
-					fprintf(stderr, "Website Name too long");
-					continue;
-				}
-		        pthread_mutex_lock(args->arrayMutex);
-		        *args->sharedArrayTail++;
-				if (*args->sharedArrayTail >= ARRAY_SIZE) {
-					*args->sharedArrayTail = 0;
-				}
-				//strcpy(*args->sharedArray[*args->sharedArrayTail], line);
-				*args->sharedArray[*args->sharedArrayTail] = line;
-				
-		        pthread_mutex_unlock(args->arrayMutex);
-		        sem_post(args->sem);
+                pthread_mutex_lock(args.requesterFileMutex);
+                fprintf(args.reqOutputFile, "%s", line);
+                pthread_mutex_unlock(args.requesterFileMutex);
+                line[strcspn(line, "\r\n")] = 0;
+		        pthread_mutex_lock(args.arrayMutex);
+				strncpy(*args.sharedArray[*args.sharedArrayTail], line, MAX_NAME_LENGTH * sizeof(char));
+                *args.arrayAmount++;
+                *args.sharedArrayTail++;
+				if (*args.sharedArrayTail >= ARRAY_SIZE) {
+					*args.sharedArrayTail = 0;
+				}		
+		        pthread_mutex_unlock(args.arrayMutex);
+		        sem_post(args.sem);
 		    }
+            fclose(inputFile);
 		}
     }
-	args->activeRequesters -= 1;
+	*args.activeRequesters -= 1;
 	fprintf(stdout, "Thread: %lu serviced %d files\n", pthread_self(), fileCount);
 }
 
@@ -66,41 +70,41 @@ void *resolverFunction (void *arg) {
     // Use utility function to resolve IP address
     // Write to file in folder
     // Repeat until all files in folder have been read
-    struct resolverArgs *args = (struct resolverArgs*) arg;
-	args->activeResolvers ++;
+    struct resolverArgs args = *(struct resolverArgs*) arg;
+	args.activeResolvers++;
 	int servicedNames = 0;
+    char line[MAX_NAME_LENGTH];
+    char resolvedIP[MAX_IP_LENGTH];
     while (1) {
-        sem_wait(args->sem);
-        pthread_mutex_lock(args->arrayMutex);
-        char *line = args->sharedArray[*args->sharedArrayHead];
-        *args->sharedArrayHead++;
-		if (*args->sharedArrayHead >= ARRAY_SIZE) {
-			*args->sharedArrayHead = 0;
-		}
-        pthread_mutex_unlock(args->arrayMutex);
-        if ((args->sharedArrayHead == args->sharedArrayTail) && args->activeRequesters == 0) {
+        pthread_mutex_lock(args.arrayMutex);
+        if ((*args.arrayAmount == 0) && (args.activeRequesters == 0)) {
 			// done
+            pthread_mutex_unlock(args.arrayMutex);
             break;
         }
+        pthread_mutex_unlock(args.arrayMutex);
+        sem_wait(args.sem);
+        pthread_mutex_lock(args.arrayMutex);
+        strncpy(line, *args.sharedArray[*args.sharedArrayHead], MAX_NAME_LENGTH * sizeof(char));
+        *args.arrayAmount--;
+        *args.sharedArrayHead++;
+		if (*args.sharedArrayHead >= ARRAY_SIZE) {
+			*args.sharedArrayHead = 0;
+		}
+        pthread_mutex_unlock(args.arrayMutex);
         // Use utility function to resolve IP address
-        char *resolvedIP = malloc(100);
-        if (dnslookup(line, resolvedIP, 100) == UTIL_FAILURE) {
-            fprintf(stderr, "Error resolving IP address\n");
-            exit(1);
+        if (dnslookup(line, resolvedIP, MAX_IP_LENGTH) == UTIL_FAILURE) {
+            strcpy(resolvedIP, "NOT_RESOLVED");
+            servicedNames--;
         }
         // Write to file in folder
-        pthread_mutex_lock(args->resolverFileMutex);
-        FILE *outputFile = fopen(args->outputFilename, "a");
-        if (outputFile == NULL) {
-            fprintf(stderr, "Error opening file\n");
-            exit(1);
-        }
-        fprintf(outputFile, "%s,%s\n", line, resolvedIP);
-        fclose(outputFile);
-		servicedNames++;
-        pthread_mutex_unlock(args->resolverFileMutex);
+        pthread_mutex_lock(args.resolverFileMutex);
+        // print resolveip
+        fprintf(args.resOutputFile, "%s, %s\n", line, resolvedIP);
+        pthread_mutex_unlock(args.resolverFileMutex);
+        servicedNames++;
     }
-	args->activeResolvers -= 1;
+	*args.activeResolvers -= 1;
 	fprintf(stdout, "Thread: %lu resolved %d hostnames\n", pthread_self(), servicedNames);
 	
 }
@@ -137,76 +141,115 @@ int main (int argc, char* argv[]) {
 	
     int numRequesters = atoi(argv[1]);
     int numResolvers = atoi(argv[2]);
-    char *reqOutputFile = argv[3];
-    char *resOutputFile = argv[4];
+    char* reqOutputFileName = argv[3];
+    char* resOutputFileName = argv[4];
     queue_t *inputFilenames = queue_create();
+    //inputFileQueue = queue_create();
     for (int i = 5; i < argc; i++) {
         queue_push(inputFilenames, argv[i]);
     }
-    char* sharedArray[ARRAY_SIZE];
-    int sharedArrayHead = 0;
-    int sharedArrayTail = 1;
-	int activeRequesters = 0;
-	int activeResolvers = 0;
-    pthread_mutex_t arrayMutex, requesterFileMutex, resolverFileMutex, requesterQueueMutex;
-    // Initialize mutexes
-    pthread_mutex_init(&arrayMutex, NULL);
-    pthread_mutex_init(&requesterFileMutex, NULL);
-    pthread_mutex_init(&resolverFileMutex, NULL);
-    pthread_mutex_init(&requesterQueueMutex, NULL);
+    char** sharedArray = malloc(sizeof(char*) * ARRAY_SIZE);
+    FILE *resOutputFile = fopen(resOutputFileName, "w");
+    FILE *reqOutputFile = fopen(reqOutputFileName, "w");
+    int *sharedArrayHead = malloc(sizeof(int));
+    int *sharedArrayTail = malloc(sizeof(int));
+	int *activeRequesters = malloc(sizeof(int));
+	int *activeResolvers = malloc(sizeof(int));
+    int *arrayAmount = malloc(sizeof(int));
+    *sharedArrayHead = 0;
+    *sharedArrayTail = 0;
+    *arrayAmount = 0;
+    *activeRequesters = 0;
+    *activeResolvers = 0;
+    // // Initialize mutexes
+    pthread_mutex_t arrayMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t requesterFileMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t resolverFileMutex = PTHREAD_MUTEX_INITIALIZER;
+    pthread_mutex_t requesterQueueMutex = PTHREAD_MUTEX_INITIALIZER;
+    // pthread_mutex_t *arrayMutex;
+    // pthread_mutex_t *requesterFileMutex;
+    // pthread_mutex_t *resolverFileMutex;
+    // pthread_mutex_t *requesterQueueMutex;
+    // pthread_mutex_init(arrayMutex, NULL);
+    // pthread_mutex_init(requesterFileMutex, NULL);
+    // pthread_mutex_init(resolverFileMutex, NULL);
+    // pthread_mutex_init(requesterQueueMutex, NULL);
     sem_t arraySem;
-    // Initialize semaphores
     sem_init(&arraySem, 0, 0);
     pthread_t requesterThreads[numRequesters];
     pthread_t resolverThreads[numResolvers];
 
-    // Create the input struct for the requester threads
+    // // Create the input struct for the requester threads
     struct requesterArgs *requesterArgs = (struct requesterArgs *)malloc(sizeof(struct requesterArgs));
-    requesterArgs->inputFileQueue = inputFilenames;
-    requesterArgs->outputFilename = reqOutputFile;
 	memcpy(&requesterArgs->sharedArray, &sharedArray, sizeof(ARRAY_SIZE));
-    requesterArgs->sharedArrayHead = &sharedArrayHead;
-    requesterArgs->sharedArrayTail = &sharedArrayTail;
+    requesterArgs->inputFileQueue = inputFilenames;
+    requesterArgs->sharedArrayHead = sharedArrayHead;
+    requesterArgs->sharedArrayTail = sharedArrayTail;
     requesterArgs->arrayMutex = &arrayMutex;
     requesterArgs->requesterFileMutex = &requesterFileMutex;
     requesterArgs->requesterQueueMutex = &requesterQueueMutex;
     requesterArgs->sem = &arraySem;
-	requesterArgs->activeRequesters = &activeRequesters;
+	requesterArgs->activeRequesters = activeRequesters;
+    requesterArgs->reqOutputFile = reqOutputFile;
+    requesterArgs->arrayAmount = arrayAmount;
 
-    // Create the input struct for the resolver threads
+    // // Create the input struct for the resolver threads
     struct resolverArgs *resolverArgs = (struct resolverArgs *)malloc(sizeof(struct resolverArgs));
-    resolverArgs->outputFilename = resOutputFile;
 	memcpy(&resolverArgs->sharedArray, &sharedArray, sizeof(ARRAY_SIZE));
-    resolverArgs->sharedArrayHead = &sharedArrayHead;
-    resolverArgs->sharedArrayTail = &sharedArrayTail;
+    resolverArgs->sharedArrayHead = sharedArrayHead;
+    resolverArgs->sharedArrayTail = sharedArrayTail;
     resolverArgs->arrayMutex = &arrayMutex;
     resolverArgs->resolverFileMutex = &resolverFileMutex;
     resolverArgs->sem = &arraySem;
-	resolverArgs->activeRequesters = &activeRequesters;
-	resolverArgs->activeResolvers = &activeResolvers;
+	resolverArgs->activeRequesters = activeRequesters;
+	resolverArgs->activeResolvers = activeResolvers;
+    resolverArgs->resOutputFile = resOutputFile;
+    resolverArgs->arrayAmount = arrayAmount;
 
     // Create the requester threads
     for (int i = 0; i < numRequesters; i++) {
-        pthread_create(&requesterThreads[i], NULL, requesterFunction, (void*) &requesterArgs);
+        pthread_create(&requesterThreads[i], NULL, requesterFunction, (void*) requesterArgs);
     }
-
+    while (arrayAmount == 0) {
+        // wait
+    }
     // Create the resolver threads
     for (int i = 0; i < numResolvers; i++) {
-        pthread_create(&resolverThreads[i], NULL, resolverFunction, (void*) &resolverArgs);
+        pthread_create(&resolverThreads[i], NULL, resolverFunction, (void*) resolverArgs);
     }
-	while (activeRequesters != 0) {
-		// wait
-	}
-	for (int i = 0; i < numRequesters; i++) {
+    fclose(resOutputFile);
+    fclose(reqOutputFile);
+    free(requesterArgs);
+    free(resolverArgs);
+    free(sharedArrayHead);
+    free(sharedArrayTail);
+    free(arrayAmount);
+    free(activeRequesters);
+    free(activeResolvers);
+    pthread_mutex_destroy(&arrayMutex);
+    pthread_mutex_destroy(&requesterFileMutex);
+    pthread_mutex_destroy(&resolverFileMutex);
+    pthread_mutex_destroy(&requesterQueueMutex);
+    sem_destroy(&arraySem);
+    for (int i = 0; i < ARRAY_SIZE; i++) {
+        free(sharedArray[i]);
+    }
+    free(sharedArray);
+	queue_destroy(inputFilenames);
+    for (int i = 0; i < numRequesters; i++) {
 		pthread_join(requesterThreads[i], NULL);
 	}
 	for (int i = 0; i < numResolvers; i++) {
 		pthread_join(resolverThreads[i], NULL);
 	}
-	queue_destroy(inputFilenames);
 	gettimeofday(&endTime, NULL);
 	struct timeval exeTime;
 	exeTime.tv_sec = endTime.tv_sec - startTime.tv_sec;
 	exeTime.tv_usec = endTime.tv_usec - startTime.tv_usec;
+    // If the microseconds is negative, subtract a second and add 1000000 to the microseconds
+    if (exeTime.tv_usec < 0) {
+        exeTime.tv_sec--;
+        exeTime.tv_usec += 1000000;
+    }
 	fprintf(stdout, "./multi-lookup: total time is %ld.%ld seconds\n", exeTime.tv_sec, exeTime.tv_usec);
 }

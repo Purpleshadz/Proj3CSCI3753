@@ -1,5 +1,6 @@
 {
     "files.associations": {
-        "make-file.h": "c"
+        "make-file.h": "c",
+        "util.h": "c"
     }
 }

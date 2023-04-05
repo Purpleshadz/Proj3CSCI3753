@@ -20,16 +20,17 @@
 
 struct requesterArgs {
     queue_t* inputFileQueue;
-    // sem_t *sem;
-    // pthread_mutex_t *arrayMutex;
-    // pthread_mutex_t *requesterFileMutex;
-    // pthread_mutex_t *requesterQueueMutex;
-    // int* sharedArrayHead;
-    // int* sharedArrayTail;
-	// int* activeRequesters;
-    // int* arrayAmount;
-	// char* *sharedArray[ARRAY_SIZE];
+    sem_t *sem;
+    pthread_mutex_t *arrayMutex;
+    pthread_mutex_t *requesterFileMutex;
+    pthread_mutex_t *requesterQueueMutex;
+    int* sharedArrayHead;
+    int* sharedArrayTail;
+	int* activeRequesters;
+    int* arrayAmount;
+	char* *sharedArray[ARRAY_SIZE];
     FILE *reqOutputFile;
+    FILE *inputFile;
     
 };
 
