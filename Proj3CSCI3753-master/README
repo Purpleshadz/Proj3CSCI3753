@@ -1,0 +1,2 @@
+cd Desktop/Proj3CSCI3753-master
+gcc multi-lookup.c queue.c util.c -lpthread -lrt
